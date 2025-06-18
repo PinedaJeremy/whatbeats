@@ -9,7 +9,7 @@ from discord.ext import commands
 DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 openai.api_key = OPENAI_API_KEY
-MODEL = "gpt-4"  # You can use "gpt-3.5-turbo"
+MODEL = "gpt-4"  # You can use "gpt-3.5-turbo" to save credits
 
 # === BOT SETUP ===
 intents = discord.Intents.default()
@@ -62,9 +62,8 @@ async def start(ctx):
     global_game["last_result"] = None
     global_game["active"] = True
 
-    await ctx.send("🟢 A new global game has started!
-First guess: **rock**
-Use `!round` to continue!")
+    # ✅ Fixed string formatting here
+    await ctx.send("🟢 A new global game has started!\nFirst guess: **rock**\nUse `!round` to continue!")
 
 # === Command: Play one global round ===
 @bot.command()
@@ -81,8 +80,7 @@ async def round(ctx):
         return
 
     result_text = result["result"]
-    await ctx.send(f"🎯 Guess: **{guess}**
-📊 Result: **{result_text}**")
+    await ctx.send(f"🎯 Guess: **{guess}**\n📊 Result: **{result_text}**")
 
     if "lose" in result_text.lower():
         global_game["active"] = False
@@ -93,7 +91,7 @@ async def round(ctx):
     global_game["last_guess"] = next_guess
     global_game["last_result"] = result_text
 
-    await ctx.send(f"🤖 The AI suggests the next guess: **{next_guess}**
-Use `!round` to play it!")
+    await ctx.send(f"🤖 The AI suggests the next guess: **{next_guess}**\nUse `!round` to play it!")
 
+# === Start the bot ===
 bot.run(DISCORD_TOKEN)
