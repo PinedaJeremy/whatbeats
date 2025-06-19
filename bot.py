@@ -51,6 +51,10 @@ Suggest a new, clever one-word guess. Just return the word. No explanation.
         return response["choices"][0]["message"]["content"].strip()
     except Exception as e:
         return "rock"
+# === Command: Play one global round ===
+@bot.command()
+async def ping(ctx):
+    await ctx.send("pong 🏓")
 
 # === Command: Start new global game ===
 @bot.command()
