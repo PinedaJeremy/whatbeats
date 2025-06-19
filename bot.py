@@ -17,45 +17,51 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# === Global Game State ===
+# === Game State ===
 global_game = {
     "active": False,
     "game_id": None,
     "last_guess": None,
-    "last_result": None
+    "last_result": None,
+    "failures": 0  # Track 418 errors
 }
 
-# === Submit a Guess to the Game API ===
+# Cooldown tracking
+user_cooldowns = {}
+cooldown_seconds = 5
+global_last_used = 0
+global_cooldown = 0.5
+
+# === Guess Submission ===
 def submit_guess(game_id, guess):
     url = "https://www.whatbeatsrock.com/api/vs"
     payload = {"gameId": game_id, "guess": guess}
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (DiscordBot) WhatBeatsRock-Bot"
+    }
     try:
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, headers=headers)
         if response.status_code == 418:
             return {
-                "result": "🚫 The server thinks we're guessing too aggressively (HTTP 418). Try a new word or wait a moment.",
-                "details": "Rate limited or blocked guess."
+                "result": "🚫 The server thinks we're guessing too aggressively (HTTP 418).",
+                "code": 418
             }
-        if response.status_code != 200:
+        elif response.status_code != 200 or not response.text.strip():
             return {
-                "result": f"❌ API returned unexpected status {response.status_code}",
-                "details": response.text or "No response text."
-            }
-        if not response.text.strip():
-            return {
-                "result": "❌ Empty response from server.",
-                "details": f"Game ID: {game_id}, Guess: {guess}"
+                "result": f"❌ API error: status {response.status_code}",
+                "code": response.status_code
             }
         return response.json()
     except Exception as e:
-        return {"result": f"Error submitting guess: {e}"}
+        return {"result": f"⚠️ Network error: {e}", "code": -1}
 
-# === Use GPT to Get a Next Guess ===
+# === OpenAI Guessing ===
 def get_next_guess(last_result, last_guess):
     prompt = f"""
-We're playing a creative word game called 'What Beats Rock'.
+We're playing a word game called 'What Beats Rock'.
 Last guess: "{last_guess}" — Result: "{last_result}".
-Suggest a clever one-word guess that might win the next round. Just return the word.
+Suggest a new one-word guess. Just return the word.
 """
     try:
         response = openai.ChatCompletion.create(
@@ -64,50 +70,83 @@ Suggest a clever one-word guess that might win the next round. Just return the w
             temperature=1.1
         )
         return response["choices"][0]["message"]["content"].strip()
-    except Exception as e:
+    except:
         return "rock"
 
-# === Command: Start a New Game ===
+# === Command: Start New Game ===
 @bot.command()
 async def start(ctx):
     global_game["game_id"] = str(uuid.uuid4())
     global_game["last_guess"] = "rock"
     global_game["last_result"] = None
+    global_game["failures"] = 0
     global_game["active"] = True
+    await ctx.send("🟢 New game started!\nFirst guess: **rock**\nUse `!round` or `!round yourword` to play.")
 
-    await ctx.send("🟢 New game started!\nFirst guess: **rock**\nUse `!round` or `!round yourword` to continue.")
-
-# === Command: Play a Round ===
+# === Command: Play Round ===
 @bot.command()
 async def round(ctx, *, user_guess=None):
+    user_id = ctx.author.id
+    now = asyncio.get_event_loop().time()
+
+    # Check if game is active
     if not global_game["active"]:
         await ctx.send("❌ No active game. Use `!start` first.")
         return
 
-    guess = user_guess.strip().lower() if user_guess else global_game["last_guess"]
-
-    await ctx.send("🕒 Thinking...")
-    await asyncio.sleep(2)  # Anti-spam delay
-
-    result = submit_guess(global_game["game_id"], guess)
-
-    await ctx.send(f"🎯 Guess: **{guess}**\n📊 Result: {result.get('result')}")
-
-    if "details" in result:
-        await ctx.send(f"🔍 Debug: `{result['details']}`")
-
-    if "lose" in result.get("result", "").lower():
-        global_game["active"] = False
-        await ctx.send("💀 The guess LOST. Game over. Use `!start` to begin again.")
+    # Per-user cooldown
+    if user_id in user_cooldowns and now - user_cooldowns[user_id] < cooldown_seconds:
+        remaining = round(cooldown_seconds - (now - user_cooldowns[user_id]), 1)
+        await ctx.send(f"⏳ Slow down! You must wait {remaining}s before guessing again.")
         return
 
-    next_guess = get_next_guess(result.get("result", ""), guess)
-    global_game["last_guess"] = next_guess
-    global_game["last_result"] = result.get("result", "")
+    # Global cooldown
+    global global_last_used
+    if now - global_last_used < global_cooldown:
+        await asyncio.sleep(global_cooldown)
 
-    await ctx.send(f"🤖 The AI suggests: **{next_guess}**\nUse `!round` or `!round yourword` to continue!")
+    global_last_used = now
+    user_cooldowns[user_id] = now
 
-# === Command: Test Bot ===
+    # Determine guess
+    guess = user_guess.strip().lower() if user_guess else global_game["last_guess"]
+    if not user_guess:
+        guess = get_next_guess(global_game["last_result"], global_game["last_guess"])
+
+    await ctx.send("🕐 Processing...")
+    await asyncio.sleep(0.1)  # tiny pause to simulate real-time feel
+
+    # Submit guess
+    result = submit_guess(global_game["game_id"], guess)
+    code = result.get("code", 0)
+
+    await ctx.send(f"🎯 Guess: **{guess}**\n📊 Result: {result['result']}")
+
+    # Handle block (418)
+    if code == 418:
+        global_game["failures"] += 1
+        if global_game["failures"] >= 3:
+            await ctx.send("🔄 Too many blocks. Resetting game session.")
+            await start(ctx)
+        else:
+            await ctx.send(f"⚠️ Warning: {global_game['failures']} failure(s). Game will reset at 3.")
+        return
+
+    # Reset failure count on success
+    global_game["failures"] = 0
+
+    if "lose" in result["result"].lower():
+        global_game["active"] = False
+        await ctx.send("💀 The guess LOST. Game over. Use `!start` to play again.")
+        return
+
+    # Store result for next GPT prompt
+    global_game["last_guess"] = guess
+    global_game["last_result"] = result["result"]
+
+    await ctx.send(f"🤖 Next? Use `!round` or `!round yourword` to continue!")
+
+# === Command: Ping Test ===
 @bot.command()
 async def ping(ctx):
     await ctx.send("pong 🏓")
