@@ -13,6 +13,8 @@ MODEL = "gpt-4"  # You can use "gpt-3.5-turbo" to save credits
 
 # === BOT SETUP ===
 intents = discord.Intents.default()
+intents.message_content = True  # ✅ Add this line
+
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # === Global game state ===
