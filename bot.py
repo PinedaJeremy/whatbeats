@@ -16,7 +16,7 @@ intents = discord.Intents.default()
 intents.message_content = True  # Required to read ! commands
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# === Global game state (shared for everyone) ===
+# === Global game state (shared) ===
 global_game = {
     "active": False,
     "game_id": None,
@@ -24,14 +24,22 @@ global_game = {
     "last_result": None
 }
 
-# === Submit guess to WhatBeatsRock API ===
+# === Submit guess to WhatBeatsRock API with debug ===
 def submit_guess(game_id, guess):
     url = "https://www.whatbeatsrock.com/api/vs"
     payload = {"gameId": game_id, "guess": guess}
     try:
         response = requests.post(url, json=payload)
-        if response.status_code != 200 or not response.text.strip():
-            return {"result": "❌ Game API returned no data or bad status."}
+        if response.status_code != 200:
+            return {
+                "result": f"❌ API returned status {response.status_code}",
+                "details": response.text
+            }
+        if not response.text.strip():
+            return {
+                "result": "❌ Empty response from server. Game ID may be expired or guess was rejected.",
+                "details": f"Game ID: {game_id}, Guess: {guess}"
+            }
         return response.json()
     except Exception as e:
         return {"result": f"Error submitting guess: {e}"}
@@ -53,52 +61,48 @@ Suggest a new, clever one-word guess. Just return the word. No explanation.
     except Exception as e:
         return "rock"
 
-# === Start a global game ===
+# === Command: Start a new global game ===
 @bot.command()
 async def start(ctx):
-    if global_game["active"]:
-        await ctx.send("🟡 A game is already in progress. Use `!round` to play the next move.")
-        return
-
     global_game["game_id"] = str(uuid.uuid4())
     global_game["last_guess"] = "rock"
     global_game["last_result"] = None
     global_game["active"] = True
 
-    await ctx.send("🟢 A new global game has started!\nFirst guess: **rock**\nUse `!round` or `!round yourword` to play.")
+    await ctx.send("🟢 New game started!\nFirst guess: **rock**\nUse `!round` or `!round yourword` to play.")
 
-# === Play a round with optional user guess ===
+# === Command: Play round with optional user guess ===
 @bot.command()
 async def round(ctx, *, user_guess=None):
     if not global_game["active"]:
-        await ctx.send("❌ No game is currently running. Start one with `!start`.")
+        await ctx.send("❌ No game running. Use `!start` first.")
         return
 
-    guess = user_guess if user_guess else global_game["last_guess"]
+    guess = user_guess.strip().lower() if user_guess else global_game["last_guess"]
     result = submit_guess(global_game["game_id"], guess)
 
-    if "result" not in result:
-        await ctx.send(f"⚠️ Unexpected response: {result}")
-        return
+    # Always show the guess and result
+    await ctx.send(f"🎯 Guess: **{guess}**\n📊 Result: {result.get('result')}")
 
-    result_text = result["result"]
-    await ctx.send(f"🎯 Guess: **{guess}**\n📊 Result: **{result_text}**")
+    # Show debug details if available
+    if "details" in result:
+        await ctx.send(f"🔍 Debug: `{result['details']}`")
 
-    if "lose" in result_text.lower():
+    if "lose" in result.get("result", "").lower():
         global_game["active"] = False
-        await ctx.send("💀 The guess LOST. The game is over for everyone. Use `!start` to begin a new game.")
+        await ctx.send("💀 The guess LOST. Game over for everyone. Use `!start` to try again.")
         return
 
-    next_guess = get_next_guess(result_text, guess)
+    next_guess = get_next_guess(result.get("result", ""), guess)
     global_game["last_guess"] = next_guess
-    global_game["last_result"] = result_text
+    global_game["last_result"] = result.get("result", "")
 
-    await ctx.send(f"🤖 The AI suggests the next guess: **{next_guess}**\nUse `!round` or `!round yourword` to continue!")
+    await ctx.send(f"🤖 The AI suggests: **{next_guess}**\nUse `!round` or `!round yourword` to continue!")
 
-# === Quick test command to confirm bot is responsive ===
+# === Ping test ===
 @bot.command()
 async def ping(ctx):
     await ctx.send("pong 🏓")
 
-# === Start the bot ===
+# === Run the bot ===
 bot.run(DISCORD_TOKEN)
