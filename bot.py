@@ -9,15 +9,14 @@ from discord.ext import commands
 DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 openai.api_key = OPENAI_API_KEY
-MODEL = "gpt-4"  # You can use "gpt-3.5-turbo" to save credits
+MODEL = "gpt-4"
 
 # === BOT SETUP ===
 intents = discord.Intents.default()
-intents.message_content = True  # ✅ Add this line
-
+intents.message_content = True  # Required to read ! commands
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# === Global game state ===
+# === Global game state (shared for everyone) ===
 global_game = {
     "active": False,
     "game_id": None,
@@ -31,11 +30,13 @@ def submit_guess(game_id, guess):
     payload = {"gameId": game_id, "guess": guess}
     try:
         response = requests.post(url, json=payload)
+        if response.status_code != 200 or not response.text.strip():
+            return {"result": "❌ Game API returned no data or bad status."}
         return response.json()
     except Exception as e:
-        return {"result": f"Error: {e}"}
+        return {"result": f"Error submitting guess: {e}"}
 
-# === Generate next guess from OpenAI ===
+# === Get next guess from OpenAI ===
 def get_next_guess(last_result, last_guess):
     prompt = f"""
 We're playing a clever word game called 'What Beats Rock'.
@@ -51,12 +52,8 @@ Suggest a new, clever one-word guess. Just return the word. No explanation.
         return response["choices"][0]["message"]["content"].strip()
     except Exception as e:
         return "rock"
-# === Command: Play one global round ===
-@bot.command()
-async def ping(ctx):
-    await ctx.send("pong 🏓")
 
-# === Command: Start new global game ===
+# === Start a global game ===
 @bot.command()
 async def start(ctx):
     if global_game["active"]:
@@ -68,21 +65,20 @@ async def start(ctx):
     global_game["last_result"] = None
     global_game["active"] = True
 
-    # ✅ Fixed string formatting here
-    await ctx.send("🟢 A new global game has started!\nFirst guess: **rock**\nUse `!round` to continue!")
+    await ctx.send("🟢 A new global game has started!\nFirst guess: **rock**\nUse `!round` or `!round yourword` to play.")
 
-# === Command: Play one global round ===
+# === Play a round with optional user guess ===
 @bot.command()
-async def round(ctx):
+async def round(ctx, *, user_guess=None):
     if not global_game["active"]:
         await ctx.send("❌ No game is currently running. Start one with `!start`.")
         return
 
-    guess = global_game["last_guess"]
+    guess = user_guess if user_guess else global_game["last_guess"]
     result = submit_guess(global_game["game_id"], guess)
 
     if "result" not in result:
-        await ctx.send(f"⚠️ Error from game API: {result}")
+        await ctx.send(f"⚠️ Unexpected response: {result}")
         return
 
     result_text = result["result"]
@@ -97,7 +93,12 @@ async def round(ctx):
     global_game["last_guess"] = next_guess
     global_game["last_result"] = result_text
 
-    await ctx.send(f"🤖 The AI suggests the next guess: **{next_guess}**\nUse `!round` to play it!")
+    await ctx.send(f"🤖 The AI suggests the next guess: **{next_guess}**\nUse `!round` or `!round yourword` to continue!")
+
+# === Quick test command to confirm bot is responsive ===
+@bot.command()
+async def ping(ctx):
+    await ctx.send("pong 🏓")
 
 # === Start the bot ===
 bot.run(DISCORD_TOKEN)
